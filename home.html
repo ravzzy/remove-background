@@ -1,0 +1,354 @@
+<!--Author: Ravzzy -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Background Remover</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        #dropZone {
+            border: 2px dashed #bdc3c7;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        #processBtn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin: 10px 0;
+            display: block;
+            width: 100%;
+        }
+        #processBtn:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        .image-container {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .hidden {
+            display: none;
+        }
+        .loading {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        img {
+            max-width: 100%;
+            max-height: 400px;
+        }
+        #errorDisplay {
+            color: #f44336;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #f44336;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Background Remover</h1>
+        <p>Upload an image and click "Process" to remove the background</p>
+        
+        <div id="dropZone">
+            <p>Drag & drop image or click to select</p>
+            <input type="file" id="fileInput" accept="image/*" style="display:none;">
+        </div>
+        
+        <button id="processBtn" disabled>Process Image</button>
+        
+        <div id="loading" class="hidden">
+            <div class="loading"></div>
+            <p id="statusText">Processing...</p>
+        </div>
+        
+        <div class="image-container">
+            <div>
+                <h3>Original</h3>
+                <img id="originalImage" class="hidden">
+            </div>
+            <div>
+                <h3>Result</h3>
+                <img id="resultImage" class="hidden">
+                <a id="downloadBtn" class="hidden" download="result.png">Download Result</a>
+            </div>
+        </div>
+        
+        <div id="errorDisplay" class="hidden"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.18.0/dist/tf.min.js"></script>
+    <script>
+    // DOM Elements
+    const elements = {
+        dropZone: document.getElementById('dropZone'),
+        fileInput: document.getElementById('fileInput'),
+        originalImage: document.getElementById('originalImage'),
+        resultImage: document.getElementById('resultImage'),
+        downloadBtn: document.getElementById('downloadBtn'),
+        processBtn: document.getElementById('processBtn'),
+        loading: document.getElementById('loading'),
+        statusText: document.getElementById('statusText'),
+        errorDisplay: document.getElementById('errorDisplay')
+    };
+
+    let model;
+    let isModelLoaded = false;
+    let currentImage = null;
+
+    // Helper Functions
+    function showError(message) {
+        console.error(message);
+        elements.errorDisplay.textContent = message;
+        elements.errorDisplay.classList.remove('hidden');
+    }
+
+    function hideError() {
+        elements.errorDisplay.classList.add('hidden');
+    }
+
+    function showLoading(message) {
+        elements.statusText.textContent = message;
+        elements.loading.classList.remove('hidden');
+    }
+
+    function hideLoading() {
+        elements.loading.classList.add('hidden');
+    }
+
+    function showElement(el) {
+        el.classList.remove('hidden');
+    }
+
+    function hideElement(el) {
+        el.classList.add('hidden');
+    }
+
+    // Initialize
+    async function init() {
+        try {
+            // Try WebGL first, fallback to CPU
+            try {
+                await tf.setBackend('webgl');
+                console.log('Using WebGL backend');
+            } catch (e) {
+                await tf.setBackend('cpu');
+                console.log('Using CPU backend');
+                showError('Warning: Using slower CPU mode');
+            }
+            
+            // Load model
+            showLoading('Loading AI model...');
+            model = await tf.loadGraphModel('models/model.json');
+            isModelLoaded = true;
+            hideLoading();
+            console.log('Model loaded successfully');
+            
+            // Set up event listeners
+            setupEventListeners();
+            
+        } catch (error) {
+            console.error('Initialization failed:', error);
+            showError('Failed to initialize: ' + error.message);
+            hideLoading();  
+        }
+    }
+
+    // Event Listeners
+    function setupEventListeners() {
+        elements.dropZone.addEventListener('click', () => elements.fileInput.click());
+        elements.fileInput.addEventListener('change', handleFileSelect);
+        elements.processBtn.addEventListener('click', processImage);
+        
+        elements.dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            elements.dropZone.style.borderColor = '#3498db';
+        });
+        
+        elements.dropZone.addEventListener('dragleave', () => {
+            elements.dropZone.style.borderColor = '#bdc3c7';
+        });
+        
+        elements.dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            elements.dropZone.style.borderColor = '#bdc3c7';
+            if (e.dataTransfer.files.length) {
+                handleFileSelect({ target: { files: e.dataTransfer.files } });
+            }
+        });
+    }
+
+    // File Selection
+    function handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        if (!file.type.match('image.*')) {
+            showError('Please select an image file (JPEG, PNG)');
+            return;
+        }
+        
+        hideError();
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            currentImage = new Image();
+            currentImage.src = e.target.result;
+            currentImage.onload = () => {
+                elements.originalImage.src = currentImage.src;
+                showElement(elements.originalImage);
+                elements.processBtn.disabled = false;
+                hideElement(elements.resultImage);
+                hideElement(elements.downloadBtn);
+            };
+        };
+        reader.onerror = () => showError('Error reading file');
+        reader.readAsDataURL(file);
+    }
+
+    // Image Processing
+async function processImage() {
+    console.log("Processing Image");
+    if (!currentImage || !isModelLoaded) return;
+    
+    try {
+        // Show loading state
+        elements.processBtn.disabled = true;
+        showLoading('Processing image...');
+        
+        // Preprocess
+        const inputTensor = tf.tidy(() => {
+            return tf.browser.fromPixels(currentImage)
+                .resizeBilinear([320, 320])
+                .toFloat()
+                .div(255)
+                .transpose([2, 0, 1]) // Convert [H, W, C] → [C, H, W]
+                .expandDims(0); // Add batch dimension [1, C, H, W]
+        });
+
+        console.log("Image re-sized");
+        
+        // Predict
+        showLoading('Removing background...');
+        
+        if (!model) {
+            console.error('Model not loaded. Please try again.');
+            return;
+        }
+        
+        console.log("Model Loaded:", model);
+        
+        console.log("Input Tensor Shape:", inputTensor.shape);
+        console.time("Prediction Time");
+        let outputTensor = await model.predict(inputTensor);
+        console.timeEnd("Prediction Time"); // Logs how long it takes
+        
+        if (Array.isArray(outputTensor)) {
+            console.log("Output is an array. Extracting first element.");
+            outputTensor = outputTensor[0]; // Get the first tensor if it's an array
+        }
+
+        if (outputTensor instanceof tf.Tensor) {
+            console.log("Output Tensor Shape:", outputTensor.shape);
+        } else {
+            console.error("Prediction did not return a valid tensor.");
+            return;
+        }
+
+        const outputData = await outputTensor.data();
+        console.log("Output Data:", outputData);
+
+        // Post-process
+        showLoading('Creating result...');
+        const mask = outputTensor.squeeze();
+        console.log("Squeezed Mask Shape:", mask.shape);
+        const threshold = 0.5;
+        const binaryMask = mask.greater(tf.scalar(threshold)).toFloat();
+        
+        // Apply mask
+        const result = await applyMask(currentImage, binaryMask);
+        
+        // Show result
+        elements.resultImage.src = result;
+        elements.downloadBtn.href = result;
+        showElement(elements.resultImage);
+        showElement(elements.downloadBtn);
+        
+    } catch (error) {
+        console.error('Processing error:', error);
+        showError('Processing failed: ' + error.message);
+    } finally {
+        hideLoading();
+        elements.processBtn.disabled = false;
+        tf.disposeVariables();
+    }
+}
+
+    // Apply mask to create transparent image
+// Apply mask to create transparent image
+async function applyMask(image, maskTensor) {
+    console.log("applying mask..")
+    return new Promise((resolve) => {
+        tf.tidy(() => {
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw original image
+            ctx.drawImage(image, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            
+            // Ensure mask has correct dimensions for resizeBilinear
+            const expandedMask = maskTensor.expandDims(-1);  // Change shape from [320, 320] to [320, 320, 1]
+            const resizedMask = tf.image.resizeBilinear(expandedMask, [canvas.height, canvas.width]);
+            console.log("Resized Mask Shape:", resizedMask.shape); // Log the resized mask shape
+
+            const maskData = resizedMask.dataSync();
+            
+            for (let i = 0; i < maskData.length; i++) {
+                imageData.data[i * 4 + 3] = Math.round(maskData[i] * 255); // Alpha channel
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+        });
+    });
+}
+
+    // Start the application
+    document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
